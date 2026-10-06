@@ -2,7 +2,7 @@
 
 ```toml
 [dependencies]
-namegender = "0.1"
+namegender = "0.2"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -70,6 +70,39 @@ match client.name("Emma", &Options::default()).await {
     Ok(r) => println!("{:?}", r.gender),
 }
 ```
+
+## Salutation
+
+The opening line of a letter or email, in the recipient's language. One credit
+per name.
+
+```rust
+use namegender::SalutationOptions;
+
+let de = SalutationOptions { language: Some("de".into()), ..Default::default() };
+let r = client.salutation("Dr. Anna Müller", &de).await?;
+println!("{}", r.salutation.formal); // Sehr geehrte Frau Dr. Müller,
+
+let tr = SalutationOptions { language: Some("tr".into()), ..Default::default() };
+let r = client.salutation("Ahmet Yılmaz", &tr).await?;
+println!("{}", r.salutation.formal); // Sayın Ahmet Bey,
+
+// First and last name stored separately; they are not parsed
+let r = client.salutation_by_parts("Anna", "Müller", &de).await?;
+
+// Up to 100 names, results in the same order
+let bulk = client.salutation_bulk(&["Anna Müller", "Acme GmbH"], &de).await?;
+println!("{} gendered of {}", bulk.summary.gendered, bulk.summary.total);
+```
+
+`SalutationOptions` has `language`, `country`, `locale`, `ip`, `gender`
+(`male`, `female` or `neutral`; overrides the lookup), `min_probability`
+(50-100, default 90) and `title` (`Dr.`). When the gender is not certain the
+salutation uses the neutral form: `form` (`gendered`, `neutral`,
+`organization`) and `reason` say why. `salutation.neutral` is always the
+gender-free line and `parts` holds the pieces of the formal one. `best_guess`
+does not apply here. An unsupported language is an `Error::Api` with
+`invalid_input` and HTTP 422.
 
 ## Country distribution and account
 
