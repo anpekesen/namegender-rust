@@ -165,7 +165,12 @@ pub enum Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Error::Api { status, error, message, .. } => write!(f, "{message} ({error}, HTTP {status})"),
+            Error::Api {
+                status,
+                error,
+                message,
+                ..
+            } => write!(f, "{message} ({error}, HTTP {status})"),
             Error::Http(e) => write!(f, "{e}"),
         }
     }
@@ -211,19 +216,34 @@ impl NameGender {
     }
 
     pub async fn name(&self, name: &str, options: &Options) -> Result<GenderResponse, Error> {
-        self.post("/gender", &with_field("name", name, options)).await
+        self.post("/gender", &with_field("name", name, options))
+            .await
     }
 
     pub async fn email(&self, email: &str, options: &Options) -> Result<GenderResponse, Error> {
-        self.post("/gender/email", &with_field("email", email, options)).await
+        self.post("/gender/email", &with_field("email", email, options))
+            .await
     }
 
-    pub async fn username(&self, username: &str, options: &Options) -> Result<GenderResponse, Error> {
-        self.post("/gender/username", &with_field("username", username, options)).await
+    pub async fn username(
+        &self,
+        username: &str,
+        options: &Options,
+    ) -> Result<GenderResponse, Error> {
+        self.post(
+            "/gender/username",
+            &with_field("username", username, options),
+        )
+        .await
     }
 
     /// Up to 100 values in one request, one credit each.
-    pub async fn bulk<S: AsRef<str>>(&self, values: &[S], value_type: ValueType, options: &Options) -> Result<BulkResponse, Error> {
+    pub async fn bulk<S: AsRef<str>>(
+        &self,
+        values: &[S],
+        value_type: ValueType,
+        options: &Options,
+    ) -> Result<BulkResponse, Error> {
         let mut body = serde_json::to_value(options).expect("options serialize");
         body["names"] = values.iter().map(|v| v.as_ref()).collect::<Vec<_>>().into();
         body["type"] = serde_json::to_value(value_type).expect("type serializes");
@@ -231,7 +251,11 @@ impl NameGender {
     }
 
     pub async fn countries(&self, name: &str, limit: u8) -> Result<CountriesResponse, Error> {
-        self.post("/gender/countries", &serde_json::json!({ "name": name, "limit": limit.clamp(1, 100) })).await
+        self.post(
+            "/gender/countries",
+            &serde_json::json!({ "name": name, "limit": limit.clamp(1, 100) }),
+        )
+        .await
     }
 
     pub async fn account(&self) -> Result<Account, Error> {
@@ -239,12 +263,22 @@ impl NameGender {
         self.send(request).await
     }
 
-    async fn post<T: for<'de> Deserialize<'de>>(&self, path: &str, body: &serde_json::Value) -> Result<T, Error> {
-        let request = self.http.post(format!("{}{}", self.base_url, path)).json(body);
+    async fn post<T: for<'de> Deserialize<'de>>(
+        &self,
+        path: &str,
+        body: &serde_json::Value,
+    ) -> Result<T, Error> {
+        let request = self
+            .http
+            .post(format!("{}{}", self.base_url, path))
+            .json(body);
         self.send(request).await
     }
 
-    async fn send<T: for<'de> Deserialize<'de>>(&self, request: reqwest::RequestBuilder) -> Result<T, Error> {
+    async fn send<T: for<'de> Deserialize<'de>>(
+        &self,
+        request: reqwest::RequestBuilder,
+    ) -> Result<T, Error> {
         let response = request
             .bearer_auth(&self.api_key)
             .header(reqwest::header::ACCEPT, "application/json")
@@ -261,7 +295,11 @@ impl NameGender {
         Err(match body {
             Some(b) => Error::Api {
                 status: status.as_u16(),
-                message: if b.message.is_empty() { format!("HTTP {}", status.as_u16()) } else { b.message },
+                message: if b.message.is_empty() {
+                    format!("HTTP {}", status.as_u16())
+                } else {
+                    b.message
+                },
                 error: b.error,
                 request_id: b.request_id,
             },

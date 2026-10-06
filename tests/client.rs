@@ -19,7 +19,12 @@ fn envelope() -> serde_json::Value {
 async fn name_sends_options_and_key() {
     let server = MockServer::start().await;
     let mut body = envelope();
-    body.as_object_mut().unwrap().extend(result("Andrea", Some("male"), Some("IT")).as_object().unwrap().clone());
+    body.as_object_mut().unwrap().extend(
+        result("Andrea", Some("male"), Some("IT"))
+            .as_object()
+            .unwrap()
+            .clone(),
+    );
     body["country_source"] = json!("locale");
 
     Mock::given(method("POST"))
@@ -32,7 +37,10 @@ async fn name_sends_options_and_key() {
         .await;
 
     let client = NameGender::new("ng_live_test").with_base_url(server.uri());
-    let options = Options { locale: Some("it-IT".into()), ..Default::default() };
+    let options = Options {
+        locale: Some("it-IT".into()),
+        ..Default::default()
+    };
     let r = client.name("Andrea", &options).await.unwrap();
 
     assert_eq!(r.gender.as_deref(), Some("male"));
@@ -45,7 +53,12 @@ async fn name_sends_options_and_key() {
 async fn default_options_send_only_the_value() {
     let server = MockServer::start().await;
     let mut body = envelope();
-    body.as_object_mut().unwrap().extend(result("jane", Some("female"), None).as_object().unwrap().clone());
+    body.as_object_mut().unwrap().extend(
+        result("jane", Some("female"), None)
+            .as_object()
+            .unwrap()
+            .clone(),
+    );
     body["country_source"] = json!(null);
 
     Mock::given(method("POST"))
@@ -57,7 +70,10 @@ async fn default_options_send_only_the_value() {
         .await;
 
     let client = NameGender::new("ng_live_test").with_base_url(server.uri());
-    let r = client.email("jane.doe@example.com", &Options::default()).await.unwrap();
+    let r = client
+        .email("jane.doe@example.com", &Options::default())
+        .await
+        .unwrap();
     assert_eq!(r.country_source, None);
 }
 
@@ -68,7 +84,10 @@ async fn bulk_sends_names_type_and_country() {
     body["took_ms"] = json!(2);
     body["country_source"] = json!("country");
     body["summary"] = json!({ "total": 2, "identified": 1, "unknown": 1, "match_rate": 50.0 });
-    body["results"] = json!([result("Emma", Some("female"), Some("DE")), result("Qzzxvv", None, Some("DE"))]);
+    body["results"] = json!([
+        result("Emma", Some("female"), Some("DE")),
+        result("Qzzxvv", None, Some("DE"))
+    ]);
 
     Mock::given(method("POST"))
         .and(path("/gender/bulk"))
@@ -79,8 +98,15 @@ async fn bulk_sends_names_type_and_country() {
         .await;
 
     let client = NameGender::new("ng_live_test").with_base_url(server.uri());
-    let options = Options { country: Some("DE".into()), best_guess: true, ..Default::default() };
-    let r = client.bulk(&["Emma", "Qzzxvv"], ValueType::Name, &options).await.unwrap();
+    let options = Options {
+        country: Some("DE".into()),
+        best_guess: true,
+        ..Default::default()
+    };
+    let r = client
+        .bulk(&["Emma", "Qzzxvv"], ValueType::Name, &options)
+        .await
+        .unwrap();
 
     assert_eq!(r.results.len(), 2);
     assert_eq!(r.results[1].gender, None);
@@ -102,7 +128,12 @@ async fn api_errors_carry_the_reason_code() {
     let err = client.name("Emma", &Options::default()).await.unwrap_err();
 
     match err {
-        Error::Api { status, error, request_id, .. } => {
+        Error::Api {
+            status,
+            error,
+            request_id,
+            ..
+        } => {
             assert_eq!(status, 402);
             assert_eq!(error, "no_credits");
             assert_eq!(request_id.as_deref(), Some("req_9"));
@@ -165,6 +196,9 @@ async fn account_and_countries() {
 #[ignore = "needs NAMEGENDER_LIVE_KEY and network"]
 async fn live_api() {
     let key = std::env::var("NAMEGENDER_LIVE_KEY").expect("NAMEGENDER_LIVE_KEY");
-    let r = NameGender::new(key).name("Emma", &Options::default()).await.unwrap();
+    let r = NameGender::new(key)
+        .name("Emma", &Options::default())
+        .await
+        .unwrap();
     assert_eq!(r.gender.as_deref(), Some("female"));
 }
