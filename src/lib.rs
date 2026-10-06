@@ -1,0 +1,282 @@
+//! Client for the [NameGender](https://namegender.com) API.
+//!
+//! ```no_run
+//! use namegender::{NameGender, Options};
+//!
+//! # async fn run() -> Result<(), namegender::Error> {
+//! let client = NameGender::new(std::env::var("NAMEGENDER_API_KEY").unwrap());
+//! let result = client
+//!     .name("Andrea", &Options { country: Some("IT".into()), ..Default::default() })
+//!     .await?;
+//! println!("{:?} {} {}", result.gender, result.probability, result.sample_size);
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! Every lookup costs one credit, unknown results included. Success is the
+//! HTTP status; any other response is returned as [`Error::Api`] carrying the
+//! API's reason code.
+
+use serde::{Deserialize, Serialize};
+use std::fmt;
+
+const DEFAULT_BASE_URL: &str = "https://namegender.com/api/v1";
+
+/// Options shared by the name, email, username and bulk lookups.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct Options {
+    /// ISO 3166-1 alpha-2 code. Andrea is male in Italy and female in Germany.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub country: Option<String>,
+    /// Language tag such as `it-IT`; its region is the country when `country`
+    /// is not sent. A tag without a region (`en`) sets none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub locale: Option<String>,
+    /// End user IP address; its country is used when neither `country` nor a
+    /// regional `locale` is sent. Not stored by the API.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ip: Option<String>,
+    /// Return the more likely gender even when the evidence is weak.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub best_guess: bool,
+    /// Ask a language model when the dataset has no answer. Requires AI
+    /// lookups to be enabled on the account.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub ai_fallback: bool,
+}
+
+/// How the values of a bulk request are read.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ValueType {
+    #[default]
+    Name,
+    Email,
+    Username,
+}
+
+/// One resolved value.
+#[derive(Debug, Clone, Deserialize)]
+pub struct GenderResult {
+    pub query: String,
+    pub name: Option<String>,
+    pub first_name: Option<String>,
+    pub middle_name: Option<String>,
+    pub last_name: Option<String>,
+    pub name_type: Option<String>,
+    /// `"male"`, `"female"` or `None` when the API does not know.
+    pub gender: Option<String>,
+    pub country: Option<String>,
+    /// How many real people the answer is based on; 0 when the source
+    /// records proportions rather than counts.
+    pub sample_size: u64,
+    pub probability: u8,
+    pub took_ms: u64,
+    pub source: String,
+    pub confidence: String,
+    pub matched_as: Option<String>,
+}
+
+/// Response of a single lookup.
+#[derive(Debug, Clone, Deserialize)]
+pub struct GenderResponse {
+    pub credits_charged: u64,
+    pub credits_remaining: u64,
+    pub data_version: Option<String>,
+    pub request_id: Option<String>,
+    /// Where the country came from: `"country"`, `"locale"`, `"ip"` or `None`.
+    pub country_source: Option<String>,
+    #[serde(flatten)]
+    pub result: GenderResult,
+}
+
+impl std::ops::Deref for GenderResponse {
+    type Target = GenderResult;
+    fn deref(&self) -> &GenderResult {
+        &self.result
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct BulkSummary {
+    pub total: u64,
+    pub identified: u64,
+    pub unknown: u64,
+    pub match_rate: f64,
+}
+
+/// Response of a bulk lookup; `results` is in the order the values were sent.
+#[derive(Debug, Clone, Deserialize)]
+pub struct BulkResponse {
+    pub credits_charged: u64,
+    pub credits_remaining: u64,
+    pub data_version: Option<String>,
+    pub request_id: Option<String>,
+    pub country_source: Option<String>,
+    pub took_ms: u64,
+    pub summary: BulkSummary,
+    pub results: Vec<GenderResult>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct Registration {
+    pub country: String,
+    pub count: u64,
+    pub share: f64,
+    pub gender: Option<String>,
+    pub probability: u8,
+    pub source: String,
+}
+
+/// Which countries a name is recorded in. Not a country-of-origin or
+/// ethnicity inference: show `basis["note"]` next to any percentage.
+#[derive(Debug, Clone, Deserialize)]
+pub struct CountriesResponse {
+    pub credits_charged: u64,
+    pub credits_remaining: u64,
+    pub registrations: Vec<Registration>,
+    pub attested_in: Vec<String>,
+    pub basis: serde_json::Value,
+}
+
+/// Credit balance and account status. Costs no credit.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Account {
+    pub email: String,
+    pub credits_remaining: u64,
+    pub free_today: u64,
+    pub free_daily_limit: u64,
+}
+
+#[derive(Debug)]
+pub enum Error {
+    /// The API answered with a non-2xx status. `error` is the reason code to
+    /// branch on, such as `no_credits` or `invalid_key`.
+    Api {
+        status: u16,
+        error: String,
+        message: String,
+        request_id: Option<String>,
+    },
+    /// The request did not complete, or the response could not be read.
+    Http(reqwest::Error),
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Error::Api { status, error, message, .. } => write!(f, "{message} ({error}, HTTP {status})"),
+            Error::Http(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+impl std::error::Error for Error {}
+
+impl From<reqwest::Error> for Error {
+    fn from(e: reqwest::Error) -> Self {
+        Error::Http(e)
+    }
+}
+
+#[derive(Deserialize)]
+struct ErrorBody {
+    error: String,
+    #[serde(default)]
+    message: String,
+    request_id: Option<String>,
+}
+
+/// The API client. Cheap to clone; reuse one per process.
+#[derive(Debug, Clone)]
+pub struct NameGender {
+    api_key: String,
+    base_url: String,
+    http: reqwest::Client,
+}
+
+impl NameGender {
+    pub fn new(api_key: impl Into<String>) -> Self {
+        Self {
+            api_key: api_key.into(),
+            base_url: DEFAULT_BASE_URL.to_string(),
+            http: reqwest::Client::new(),
+        }
+    }
+
+    /// Point the client at another base URL, for example a test server.
+    pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
+        self.base_url = base_url.into().trim_end_matches('/').to_string();
+        self
+    }
+
+    pub async fn name(&self, name: &str, options: &Options) -> Result<GenderResponse, Error> {
+        self.post("/gender", &with_field("name", name, options)).await
+    }
+
+    pub async fn email(&self, email: &str, options: &Options) -> Result<GenderResponse, Error> {
+        self.post("/gender/email", &with_field("email", email, options)).await
+    }
+
+    pub async fn username(&self, username: &str, options: &Options) -> Result<GenderResponse, Error> {
+        self.post("/gender/username", &with_field("username", username, options)).await
+    }
+
+    /// Up to 100 values in one request, one credit each.
+    pub async fn bulk<S: AsRef<str>>(&self, values: &[S], value_type: ValueType, options: &Options) -> Result<BulkResponse, Error> {
+        let mut body = serde_json::to_value(options).expect("options serialize");
+        body["names"] = values.iter().map(|v| v.as_ref()).collect::<Vec<_>>().into();
+        body["type"] = serde_json::to_value(value_type).expect("type serializes");
+        self.post("/gender/bulk", &body).await
+    }
+
+    pub async fn countries(&self, name: &str, limit: u8) -> Result<CountriesResponse, Error> {
+        self.post("/gender/countries", &serde_json::json!({ "name": name, "limit": limit.clamp(1, 100) })).await
+    }
+
+    pub async fn account(&self) -> Result<Account, Error> {
+        let request = self.http.get(format!("{}/me", self.base_url));
+        self.send(request).await
+    }
+
+    async fn post<T: for<'de> Deserialize<'de>>(&self, path: &str, body: &serde_json::Value) -> Result<T, Error> {
+        let request = self.http.post(format!("{}{}", self.base_url, path)).json(body);
+        self.send(request).await
+    }
+
+    async fn send<T: for<'de> Deserialize<'de>>(&self, request: reqwest::RequestBuilder) -> Result<T, Error> {
+        let response = request
+            .bearer_auth(&self.api_key)
+            .header(reqwest::header::ACCEPT, "application/json")
+            .send()
+            .await?;
+
+        let status = response.status();
+        if status.is_success() {
+            return Ok(response.json::<T>().await?);
+        }
+
+        let text = response.text().await.unwrap_or_default();
+        let body: Option<ErrorBody> = serde_json::from_str(&text).ok();
+        Err(match body {
+            Some(b) => Error::Api {
+                status: status.as_u16(),
+                message: if b.message.is_empty() { format!("HTTP {}", status.as_u16()) } else { b.message },
+                error: b.error,
+                request_id: b.request_id,
+            },
+            None => Error::Api {
+                status: status.as_u16(),
+                error: "http_error".into(),
+                message: format!("HTTP {}", status.as_u16()),
+                request_id: None,
+            },
+        })
+    }
+}
+
+fn with_field(field: &str, value: &str, options: &Options) -> serde_json::Value {
+    let mut body = serde_json::to_value(options).expect("options serialize");
+    body[field] = value.into();
+    body
+}
