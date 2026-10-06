@@ -259,6 +259,97 @@ pub struct SalutationBulkResponse {
     pub results: Vec<SalutationResult>,
 }
 
+/// Options for the name check endpoints. Fields left as `None` are not sent.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct NameCheckOptions {
+    /// Country hint, as in [`Options`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub country: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub locale: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ip: Option<String>,
+}
+
+/// One reason behind an assessment.
+#[derive(Debug, Clone, Deserialize)]
+pub struct NameCheckSignal {
+    /// Such as `"keyboard_pattern"`, `"placeholder"` or `"first_name_attested"`.
+    pub code: String,
+    /// `"high"`, `"medium"`, `"low"`, `"info"` or `"positive"`.
+    pub severity: String,
+    /// `"full"`, `"first_name"`, `"last_name"` or `None`.
+    pub part: Option<String>,
+    pub value: Option<String>,
+}
+
+/// What the database knows about the first name. Surnames are judged by
+/// their shape only.
+#[derive(Debug, Clone, Deserialize)]
+pub struct NameCheckEvidence {
+    /// `"counted"`, `"attested"`, `"not_found"` or `None`.
+    pub first_name_status: Option<String>,
+    pub first_name_counted_records: u64,
+}
+
+/// Whether one name looks like a real person's name. It never calls a name
+/// fake: use it to flag records, not to reject people automatically.
+#[derive(Debug, Clone, Deserialize)]
+pub struct NameCheckResult {
+    pub query: String,
+    /// `"plausible"`, `"suspicious"` or `"implausible"`.
+    pub assessment: String,
+    /// 0-100.
+    pub score: u8,
+    pub signals: Vec<NameCheckSignal>,
+    pub first_name: Option<String>,
+    pub last_name: Option<String>,
+    /// `"personal"`, `"organization"` or `"role"`.
+    pub name_type: String,
+    pub evidence: NameCheckEvidence,
+}
+
+/// Response of a single name check.
+#[derive(Debug, Clone, Deserialize)]
+pub struct NameCheckResponse {
+    pub credits_charged: u64,
+    pub credits_remaining: u64,
+    pub data_version: Option<String>,
+    pub request_id: Option<String>,
+    pub country_source: Option<String>,
+    #[serde(flatten)]
+    pub result: NameCheckResult,
+}
+
+impl std::ops::Deref for NameCheckResponse {
+    type Target = NameCheckResult;
+    fn deref(&self) -> &NameCheckResult {
+        &self.result
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct NameCheckSummary {
+    pub total: u64,
+    pub plausible: u64,
+    pub suspicious: u64,
+    pub implausible: u64,
+}
+
+/// Response of a bulk name check; `results` is in the order the names were
+/// sent.
+#[derive(Debug, Clone, Deserialize)]
+pub struct NameCheckBulkResponse {
+    pub credits_charged: u64,
+    pub credits_remaining: u64,
+    pub data_version: Option<String>,
+    pub request_id: Option<String>,
+    pub country_source: Option<String>,
+    pub took_ms: u64,
+    pub summary: NameCheckSummary,
+    pub results: Vec<NameCheckResult>,
+}
+
 #[derive(Debug)]
 pub enum Error {
     /// The API answered with a non-2xx status. `error` is the reason code to
@@ -408,6 +499,47 @@ impl NameGender {
         let mut body = serde_json::to_value(options).expect("options serialize");
         body["names"] = names.iter().map(|n| n.as_ref()).collect::<Vec<_>>().into();
         self.post("/salutation/bulk", &body).await
+    }
+
+    /// Whether a name typed into a form looks like a real person's name,
+    /// with the reasons. One credit. It never calls a name fake: use it to
+    /// flag records, not to reject people automatically.
+    pub async fn name_check(
+        &self,
+        name: &str,
+        options: &NameCheckOptions,
+    ) -> Result<NameCheckResponse, Error> {
+        let mut body = serde_json::to_value(options).expect("options serialize");
+        body["name"] = name.into();
+        self.post("/name-check", &body).await
+    }
+
+    /// Like [`name_check`](Self::name_check) for a first and last name stored
+    /// separately; they are not parsed. An empty string is not sent.
+    pub async fn name_check_by_parts(
+        &self,
+        first_name: &str,
+        last_name: &str,
+        options: &NameCheckOptions,
+    ) -> Result<NameCheckResponse, Error> {
+        let mut body = serde_json::to_value(options).expect("options serialize");
+        for (field, value) in [("first_name", first_name), ("last_name", last_name)] {
+            if !value.is_empty() {
+                body[field] = value.into();
+            }
+        }
+        self.post("/name-check", &body).await
+    }
+
+    /// Checks up to 100 names in one request, one credit each.
+    pub async fn name_check_bulk<S: AsRef<str>>(
+        &self,
+        names: &[S],
+        options: &NameCheckOptions,
+    ) -> Result<NameCheckBulkResponse, Error> {
+        let mut body = serde_json::to_value(options).expect("options serialize");
+        body["names"] = names.iter().map(|n| n.as_ref()).collect::<Vec<_>>().into();
+        self.post("/name-check/bulk", &body).await
     }
 
     pub async fn account(&self) -> Result<Account, Error> {

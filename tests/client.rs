@@ -1,7 +1,7 @@
 // The salutation bodies are large json! literals.
 #![recursion_limit = "256"]
 
-use namegender::{Error, NameGender, Options, SalutationOptions, ValueType};
+use namegender::{Error, NameCheckOptions, NameGender, Options, SalutationOptions, ValueType};
 use serde_json::json;
 use wiremock::matchers::{body_json, header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -367,6 +367,218 @@ async fn an_unsupported_salutation_language_is_an_api_error() {
         Error::Api { status, error, .. } => {
             assert_eq!(status, 422);
             assert_eq!(error, "invalid_input");
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn name_check_parses_signals_and_evidence() {
+    let server = MockServer::start().await;
+    let body = json!({
+        "credits_charged": 1, "credits_remaining": 4999, "data_version": "2026.10",
+        "request_id": "req_5", "country_source": "country", "query": "asdf qwerty",
+        "assessment": "implausible", "score": 0,
+        "signals": [
+            {
+                "code": "keyboard_pattern", "severity": "high",
+                "part": "first_name", "value": "asdf"
+            },
+            {
+                "code": "keyboard_pattern", "severity": "high",
+                "part": "last_name", "value": "qwerty"
+            },
+            { "code": "first_name_not_found", "severity": "medium", "part": null, "value": null }
+        ],
+        "first_name": "Asdf", "last_name": "Qwerty", "name_type": "personal",
+        "evidence": { "first_name_status": "not_found", "first_name_counted_records": 0 }
+    });
+    let expected = json!({ "name": "asdf qwerty", "country": "US" });
+
+    Mock::given(method("POST"))
+        .and(path("/name-check"))
+        .and(header("authorization", "Bearer ng_live_test"))
+        .and(body_json(expected))
+        .respond_with(ResponseTemplate::new(200).set_body_json(body))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = NameGender::new("ng_live_test").with_base_url(server.uri());
+    let options = NameCheckOptions {
+        country: Some("US".into()),
+        ..Default::default()
+    };
+    let r = client.name_check("asdf qwerty", &options).await.unwrap();
+
+    assert_eq!(r.assessment, "implausible");
+    assert_eq!(r.score, 0);
+    assert_eq!(r.signals.len(), 3);
+    assert_eq!(r.signals[0].code, "keyboard_pattern");
+    assert_eq!(r.signals[0].severity, "high");
+    assert_eq!(r.signals[0].part.as_deref(), Some("first_name"));
+    assert_eq!(r.signals[0].value.as_deref(), Some("asdf"));
+    assert_eq!(r.signals[2].code, "first_name_not_found");
+    assert_eq!(r.signals[2].part, None);
+    assert_eq!(r.signals[2].value, None);
+    assert_eq!(r.first_name.as_deref(), Some("Asdf"));
+    assert_eq!(r.last_name.as_deref(), Some("Qwerty"));
+    assert_eq!(r.name_type, "personal");
+    let status = r.evidence.first_name_status.as_deref();
+    assert_eq!(status, Some("not_found"));
+    assert_eq!(r.evidence.first_name_counted_records, 0);
+    assert_eq!(r.country_source.as_deref(), Some("country"));
+    assert_eq!(r.request_id.as_deref(), Some("req_5"));
+    assert_eq!(r.credits_remaining, 4999);
+}
+
+#[tokio::test]
+async fn name_check_by_parts_sends_only_set_fields() {
+    let server = MockServer::start().await;
+    let body = json!({
+        "credits_charged": 1, "credits_remaining": 98, "data_version": "2026.10",
+        "request_id": "req_6", "country_source": null, "query": "Jennifer Null",
+        "assessment": "plausible", "score": 96,
+        "signals": [
+            {
+                "code": "first_name_attested", "severity": "positive",
+                "part": "first_name", "value": "Jennifer"
+            }
+        ],
+        "first_name": "Jennifer", "last_name": "Null", "name_type": "personal",
+        "evidence": { "first_name_status": null, "first_name_counted_records": 5871000 }
+    });
+    let expected = json!({
+        "first_name": "Jennifer", "last_name": "Null", "locale": "en-US"
+    });
+
+    Mock::given(method("POST"))
+        .and(path("/name-check"))
+        .and(body_json(expected))
+        .respond_with(ResponseTemplate::new(200).set_body_json(body))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = NameGender::new("ng_live_test").with_base_url(server.uri());
+    let options = NameCheckOptions {
+        locale: Some("en-US".into()),
+        ..Default::default()
+    };
+    let r = client
+        .name_check_by_parts("Jennifer", "Null", &options)
+        .await
+        .unwrap();
+
+    assert_eq!(r.assessment, "plausible");
+    assert_eq!(r.score, 96);
+    assert_eq!(r.signals[0].severity, "positive");
+    assert_eq!(r.evidence.first_name_status, None);
+    assert_eq!(r.evidence.first_name_counted_records, 5871000);
+    assert_eq!(r.country_source, None);
+}
+
+#[tokio::test]
+async fn name_check_bulk_keeps_the_order() {
+    let server = MockServer::start().await;
+    let body = json!({
+        "credits_charged": 3, "credits_remaining": 96, "data_version": "2026.10",
+        "request_id": "req_7", "took_ms": 4, "country_source": "ip",
+        "summary": { "total": 3, "plausible": 1, "suspicious": 1, "implausible": 1 },
+        "results": [
+            {
+                "query": "Jennifer Null", "assessment": "plausible", "score": 96, "signals": [],
+                "first_name": "Jennifer", "last_name": "Null", "name_type": "personal",
+                "evidence": {
+                    "first_name_status": "counted", "first_name_counted_records": 5871000
+                }
+            },
+            {
+                "query": "Mickey Mouse", "assessment": "suspicious", "score": 35,
+                "signals": [
+                    {
+                        "code": "fictional_character", "severity": "medium",
+                        "part": "full", "value": "Mickey Mouse"
+                    }
+                ],
+                "first_name": "Mickey", "last_name": "Mouse", "name_type": "personal",
+                "evidence": { "first_name_status": "counted", "first_name_counted_records": 1200 }
+            },
+            {
+                "query": "asdf qwerty", "assessment": "implausible", "score": 0,
+                "signals": [
+                    {
+                        "code": "keyboard_pattern", "severity": "high",
+                        "part": "first_name", "value": "asdf"
+                    }
+                ],
+                "first_name": "Asdf", "last_name": "Qwerty", "name_type": "personal",
+                "evidence": { "first_name_status": "not_found", "first_name_counted_records": 0 }
+            }
+        ]
+    });
+    let expected = json!({
+        "names": ["Jennifer Null", "Mickey Mouse", "asdf qwerty"], "ip": "203.0.113.7"
+    });
+
+    Mock::given(method("POST"))
+        .and(path("/name-check/bulk"))
+        .and(body_json(expected))
+        .respond_with(ResponseTemplate::new(200).set_body_json(body))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = NameGender::new("ng_live_test").with_base_url(server.uri());
+    let options = NameCheckOptions {
+        ip: Some("203.0.113.7".into()),
+        ..Default::default()
+    };
+    let names = ["Jennifer Null", "Mickey Mouse", "asdf qwerty"];
+    let r = client.name_check_bulk(&names, &options).await.unwrap();
+
+    assert_eq!(r.results.len(), 3);
+    for (result, name) in r.results.iter().zip(names) {
+        assert_eq!(result.query, name);
+    }
+    assert_eq!(r.results[0].assessment, "plausible");
+    assert_eq!(r.results[1].assessment, "suspicious");
+    assert_eq!(r.results[2].assessment, "implausible");
+    assert_eq!(r.results[1].signals[0].code, "fictional_character");
+    assert_eq!(r.results[1].signals[0].part.as_deref(), Some("full"));
+    assert_eq!(r.summary.total, 3);
+    assert_eq!(r.summary.plausible, 1);
+    assert_eq!(r.summary.suspicious, 1);
+    assert_eq!(r.summary.implausible, 1);
+    assert_eq!(r.country_source.as_deref(), Some("ip"));
+    assert_eq!(r.took_ms, 4);
+    assert_eq!(r.credits_charged, 3);
+}
+
+#[tokio::test]
+async fn a_name_check_without_credits_is_an_api_error() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/name-check"))
+        .and(body_json(json!({ "name": "Anna" })))
+        .respond_with(ResponseTemplate::new(402).set_body_json(json!({
+            "error": "no_credits", "message": "No credits left.", "request_id": "req_8"
+        })))
+        .mount(&server)
+        .await;
+
+    let client = NameGender::new("ng_live_test").with_base_url(server.uri());
+    let options = NameCheckOptions::default();
+    match client.name_check("Anna", &options).await.unwrap_err() {
+        Error::Api {
+            status,
+            error,
+            request_id,
+            ..
+        } => {
+            assert_eq!(status, 402);
+            assert_eq!(error, "no_credits");
+            assert_eq!(request_id.as_deref(), Some("req_8"));
         }
         other => panic!("unexpected error: {other:?}"),
     }

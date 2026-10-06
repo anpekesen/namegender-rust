@@ -2,7 +2,7 @@
 
 ```toml
 [dependencies]
-namegender = "0.2"
+namegender = "0.3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -103,6 +103,33 @@ salutation uses the neutral form: `form` (`gendered`, `neutral`,
 gender-free line and `parts` holds the pieces of the formal one. `best_guess`
 does not apply here. An unsupported language is an `Error::Api` with
 `invalid_input` and HTTP 422.
+
+## Name check
+
+Whether a name typed into a form looks like a real person's name, with the
+reasons. One credit per name.
+
+```rust
+use namegender::NameCheckOptions;
+
+let none = NameCheckOptions::default();
+let r = client.name_check("asdf qwerty", &none).await?;
+println!("{} {}", r.assessment, r.score); // implausible 0
+
+let r = client.name_check_by_parts("Jennifer", "Null", &none).await?;
+println!("{}", r.assessment); // plausible
+
+// Up to 100 names, results in the same order
+let bulk = client.name_check_bulk(&["Jennifer Null", "asdf qwerty"], &none).await?;
+println!("{} implausible of {}", bulk.summary.implausible, bulk.summary.total);
+```
+
+`assessment` is `plausible`, `suspicious` or `implausible`, `score` is 0-100
+and `signals` lists the reasons (`code`, `severity`, `part`, `value`).
+`NameCheckOptions` has `country`, `locale` and `ip`. It never calls a name
+fake: use it to flag records for a closer look, not to reject people
+automatically. Surnames are judged by their shape only; `evidence` says what
+the database knows about the first name.
 
 ## Country distribution and account
 
