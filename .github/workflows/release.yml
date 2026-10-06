@@ -1,8 +1,11 @@
-# crates.io release on a v* tag, through Trusted Publishing (GitHub OIDC):
-# no long-lived token is stored. crates.io only allows trusted publishing for a
-# crate that already exists, so the very first version (0.1.0) is published
-# once by hand with `cargo publish`; after that, configure this repository and
-# release.yml under the crate's Settings > Trusted Publishing on crates.io.
+# crates.io release on a v* tag.
+#
+# crates.io allows Trusted Publishing (GitHub OIDC, no stored token) only for a
+# crate that already exists. So the first version goes out with a token in the
+# repository secret CARGO_REGISTRY_TOKEN (crates.io > Account Settings > API
+# Tokens, scope publish-new). After that: add this repository and release.yml
+# under the crate's Settings > Trusted Publishing, and DELETE the secret; every
+# later release then authenticates through OIDC.
 # The tag must match the version in Cargo.toml; a crates.io version cannot be
 # deleted, only yanked.
 name: release
@@ -17,6 +20,8 @@ jobs:
     permissions:
       contents: read
       id-token: write
+    env:
+      HAS_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN != '' }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -27,6 +32,7 @@ jobs:
       - run: cargo test
       - uses: rust-lang/crates-io-auth-action@v1
         id: auth
+        if: env.HAS_TOKEN != 'true'
       - run: cargo publish
         env:
-          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN || steps.auth.outputs.token }}
