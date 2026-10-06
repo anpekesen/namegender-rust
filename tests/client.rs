@@ -314,7 +314,9 @@ async fn salutation_bulk_keeps_the_order() {
 
     Mock::given(method("POST"))
         .and(path("/salutation/bulk"))
-        .and(body_json(json!({ "names": ["Dr. Anna Müller", "Kim Meyer", "Acme GmbH"], "language": "de" })))
+        .and(body_json(
+            json!({ "names": ["Dr. Anna Müller", "Kim Meyer", "Acme GmbH"], "language": "de" }),
+        ))
         .respond_with(ResponseTemplate::new(200).set_body_json(body))
         .expect(1)
         .mount(&server)
@@ -332,7 +334,10 @@ async fn salutation_bulk_keeps_the_order() {
     for (result, name) in r.results.iter().zip(names) {
         assert_eq!(result.query, name);
     }
-    assert_eq!(r.results[1].reason.as_deref(), Some("below_min_probability"));
+    assert_eq!(
+        r.results[1].reason.as_deref(),
+        Some("below_min_probability")
+    );
     assert_eq!(r.results[2].form, "organization");
     assert_eq!(r.results[2].parts.name, None);
     assert_eq!(r.summary.total, 3);
