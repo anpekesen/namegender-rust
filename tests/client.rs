@@ -1,7 +1,9 @@
 // The salutation bodies are large json! literals.
 #![recursion_limit = "256"]
 
-use namegender::{Error, NameCheckOptions, NameGender, Options, SalutationOptions, ValueType};
+use namegender::{
+    AgeOptions, Error, NameCheckOptions, NameGender, Options, SalutationOptions, ValueType,
+};
 use serde_json::json;
 use wiremock::matchers::{body_json, header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -582,6 +584,195 @@ async fn a_name_check_without_credits_is_an_api_error() {
         }
         other => panic!("unexpected error: {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn age_parses_both_ranges() {
+    let server = MockServer::start().await;
+    let body = json!({
+        "credits_charged": 1, "credits_remaining": 49999, "request_id": "req_1",
+        "name": "Brittany", "first_name": "Brittany", "gender": null,
+        "age": 36,
+        "age_range": { "low": 32, "high": 38 },
+        "age_range_80": { "low": 28, "high": 41 },
+        "birth_year": 1990, "sample_size": 353775, "births": 361434,
+        "country": "US", "country_source": "default",
+        "source": "ssa", "series": "1880-2024", "reference_year": 2026,
+        "reason": null
+    });
+
+    Mock::given(method("POST"))
+        .and(path("/age"))
+        .and(header("authorization", "Bearer ng_live_test"))
+        .and(body_json(json!({ "name": "Brittany" })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(body))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = NameGender::new("ng_live_test").with_base_url(server.uri());
+    let options = AgeOptions::default();
+    let r = client.age("Brittany", &options).await.unwrap();
+
+    assert_eq!(r.name, "Brittany");
+    assert_eq!(r.first_name.as_deref(), Some("Brittany"));
+    assert_eq!(r.gender, None);
+    assert_eq!(r.age, Some(36));
+    let range = r.age_range.as_ref().unwrap();
+    assert_eq!((range.low, range.high), (32, 38));
+    let range_80 = r.age_range_80.as_ref().unwrap();
+    assert_eq!((range_80.low, range_80.high), (28, 41));
+    assert_eq!(r.birth_year, Some(1990));
+    assert_eq!(r.sample_size, 353775);
+    assert_eq!(r.births, 361434);
+    assert_eq!(r.country, "US");
+    assert_eq!(r.country_source, "default");
+    assert_eq!(r.source.as_deref(), Some("ssa"));
+    assert_eq!(r.series.as_deref(), Some("1880-2024"));
+    assert_eq!(r.reference_year, 2026);
+    assert_eq!(r.reason, None);
+    assert_eq!(r.credits_charged, 1);
+    assert_eq!(r.credits_remaining, 49999);
+    assert_eq!(r.request_id.as_deref(), Some("req_1"));
+}
+
+#[tokio::test]
+async fn age_sends_only_set_options() {
+    let server = MockServer::start().await;
+    let body = json!({
+        "credits_charged": 1, "credits_remaining": 49998, "request_id": "req_2",
+        "name": "Camille", "first_name": "Camille", "gender": "female",
+        "age": 24,
+        "age_range": { "low": 19, "high": 31 },
+        "age_range_80": { "low": 14, "high": 38 },
+        "birth_year": 2002, "sample_size": 120000, "births": 125000,
+        "country": "FR", "country_source": "country",
+        "source": "insee", "series": "1900-2024", "reference_year": 2026,
+        "reason": null
+    });
+    let expected = json!({
+        "name": "Camille", "gender": "female", "country": "FR", "ip": "203.0.113.7"
+    });
+
+    Mock::given(method("POST"))
+        .and(path("/age"))
+        .and(body_json(expected))
+        .respond_with(ResponseTemplate::new(200).set_body_json(body))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = NameGender::new("ng_live_test").with_base_url(server.uri());
+    let options = AgeOptions {
+        gender: Some("female".into()),
+        country: Some("FR".into()),
+        ip: Some("203.0.113.7".into()),
+        ..Default::default()
+    };
+    let r = client.age("Camille", &options).await.unwrap();
+
+    assert_eq!(r.gender.as_deref(), Some("female"));
+    assert_eq!(r.age, Some(24));
+    assert_eq!(r.country_source, "country");
+}
+
+#[tokio::test]
+async fn age_country_not_covered_is_a_result_not_an_error() {
+    let server = MockServer::start().await;
+    let body = json!({
+        "credits_charged": 0, "credits_remaining": 49999, "request_id": "req_3",
+        "name": "Ayşe", "first_name": "Ayşe", "gender": null,
+        "age": null, "age_range": null, "age_range_80": null,
+        "birth_year": null, "sample_size": 0, "births": 0,
+        "country": "TR", "country_source": "country",
+        "source": null, "series": null, "reference_year": 2026,
+        "reason": "country_not_covered"
+    });
+
+    Mock::given(method("POST"))
+        .and(path("/age"))
+        .and(body_json(json!({ "name": "Ayşe", "country": "TR" })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(body))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = NameGender::new("ng_live_test").with_base_url(server.uri());
+    let options = AgeOptions {
+        country: Some("TR".into()),
+        ..Default::default()
+    };
+    let r = client.age("Ayşe", &options).await.unwrap();
+
+    assert_eq!(r.age, None);
+    assert!(r.age_range.is_none());
+    assert!(r.age_range_80.is_none());
+    assert_eq!(r.birth_year, None);
+    assert_eq!(r.sample_size, 0);
+    assert_eq!(r.source, None);
+    assert_eq!(r.series, None);
+    assert_eq!(r.reason.as_deref(), Some("country_not_covered"));
+    assert_eq!(r.credits_charged, 0);
+}
+
+#[tokio::test]
+async fn age_bulk_keeps_the_order() {
+    let server = MockServer::start().await;
+    let body = json!({
+        "credits_charged": 2, "credits_remaining": 49997, "request_id": "req_4",
+        "country_source": "default",
+        "results": [
+            {
+                "name": "Brittany", "first_name": "Brittany", "gender": "female",
+                "age": 36,
+                "age_range": { "low": 32, "high": 38 },
+                "age_range_80": { "low": 28, "high": 41 },
+                "birth_year": 1990, "sample_size": 353775, "births": 361434,
+                "country": "US", "country_source": "default",
+                "source": "ssa", "series": "1880-2024", "reference_year": 2026,
+                "reason": null
+            },
+            {
+                "name": "Xqzt", "first_name": "Xqzt", "gender": "female",
+                "age": null, "age_range": null, "age_range_80": null,
+                "birth_year": null, "sample_size": 0, "births": 0,
+                "country": "US", "country_source": "default",
+                "source": "ssa", "series": "1880-2024", "reference_year": 2026,
+                "reason": "not_found"
+            }
+        ]
+    });
+    let expected = json!({ "names": ["Brittany", "Xqzt"], "gender": "female" });
+
+    Mock::given(method("POST"))
+        .and(path("/age/bulk"))
+        .and(body_json(expected))
+        .respond_with(ResponseTemplate::new(200).set_body_json(body))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = NameGender::new("ng_live_test").with_base_url(server.uri());
+    let options = AgeOptions {
+        gender: Some("female".into()),
+        ..Default::default()
+    };
+    let names = ["Brittany", "Xqzt"];
+    let r = client.age_bulk(&names, &options).await.unwrap();
+
+    assert_eq!(r.results.len(), 2);
+    for (result, name) in r.results.iter().zip(names) {
+        assert_eq!(result.name, name);
+    }
+    assert_eq!(r.results[0].age, Some(36));
+    let range = r.results[0].age_range.as_ref().unwrap();
+    assert_eq!((range.low, range.high), (32, 38));
+    assert_eq!(r.results[1].age, None);
+    let reason = r.results[1].reason.as_deref();
+    assert_eq!(reason, Some("not_found"));
+    assert_eq!(r.country_source.as_deref(), Some("default"));
+    assert_eq!(r.credits_charged, 2);
+    assert_eq!(r.request_id.as_deref(), Some("req_4"));
 }
 
 #[tokio::test]

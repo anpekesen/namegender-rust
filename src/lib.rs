@@ -350,6 +350,92 @@ pub struct NameCheckBulkResponse {
     pub results: Vec<NameCheckResult>,
 }
 
+/// Options for the age endpoints. Fields left as `None` are not sent.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct AgeOptions {
+    /// `male` or `female`: only that gender's records are counted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gender: Option<String>,
+    /// Country hint, as in [`Options`]. With no hint at all US data is used.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub country: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub locale: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ip: Option<String>,
+}
+
+/// A range of ages in years, `low` to `high` inclusive.
+#[derive(Debug, Clone, Deserialize)]
+pub struct AgeRange {
+    pub low: u16,
+    pub high: u16,
+}
+
+/// The typical age of the people who carry a first name. It describes a
+/// group, not a person: never use it for decisions about an individual.
+#[derive(Debug, Clone, Deserialize)]
+pub struct AgeResult {
+    /// The name as sent.
+    pub name: String,
+    pub first_name: Option<String>,
+    /// The gender the estimate was narrowed to, or `None` for both.
+    pub gender: Option<String>,
+    /// Median age; `None` when there is no estimate, with `reason` saying why.
+    pub age: Option<u16>,
+    /// The middle half of the people with the name.
+    pub age_range: Option<AgeRange>,
+    /// The middle 80% of the people with the name.
+    pub age_range_80: Option<AgeRange>,
+    /// Median birth year.
+    pub birth_year: Option<u16>,
+    /// Estimated living people the answer is based on.
+    pub sample_size: u64,
+    /// Recorded births with the name.
+    pub births: u64,
+    pub country: String,
+    /// Where the country came from: `"country"`, `"locale"`, `"ip"` or
+    /// `"default"` (no hint, US data used).
+    pub country_source: String,
+    /// Such as `"ssa"`; `None` for a country that is not covered.
+    pub source: Option<String>,
+    /// Years of birth records, such as `"1880-2024"`.
+    pub series: Option<String>,
+    /// The year ages are counted to.
+    pub reference_year: u16,
+    /// `"not_found"`, `"insufficient_data"` or `"country_not_covered"` when
+    /// `age` is `None`. Not an error; `country_not_covered` costs no credit.
+    pub reason: Option<String>,
+}
+
+/// Response of a single age estimate.
+#[derive(Debug, Clone, Deserialize)]
+pub struct AgeResponse {
+    pub credits_charged: u64,
+    pub credits_remaining: u64,
+    pub request_id: Option<String>,
+    #[serde(flatten)]
+    pub result: AgeResult,
+}
+
+impl std::ops::Deref for AgeResponse {
+    type Target = AgeResult;
+    fn deref(&self) -> &AgeResult {
+        &self.result
+    }
+}
+
+/// Response of a bulk age estimate; `results` is in the order the names were
+/// sent.
+#[derive(Debug, Clone, Deserialize)]
+pub struct AgeBulkResponse {
+    pub credits_charged: u64,
+    pub credits_remaining: u64,
+    pub request_id: Option<String>,
+    pub country_source: Option<String>,
+    pub results: Vec<AgeResult>,
+}
+
 #[derive(Debug)]
 pub enum Error {
     /// The API answered with a non-2xx status. `error` is the reason code to
@@ -540,6 +626,27 @@ impl NameGender {
         let mut body = serde_json::to_value(options).expect("options serialize");
         body["names"] = names.iter().map(|n| n.as_ref()).collect::<Vec<_>>().into();
         self.post("/name-check/bulk", &body).await
+    }
+
+    /// The typical age of the people who carry a first name: median `age`,
+    /// `age_range` (middle half) and `age_range_80`. One credit; a country
+    /// that is not covered (only the US, France and Norway are) costs none
+    /// and comes back with `age` `None` and a `reason`, not as an error.
+    pub async fn age(&self, name: &str, options: &AgeOptions) -> Result<AgeResponse, Error> {
+        let mut body = serde_json::to_value(options).expect("options serialize");
+        body["name"] = name.into();
+        self.post("/age", &body).await
+    }
+
+    /// Age estimates for up to 100 names in one request, one credit each.
+    pub async fn age_bulk<S: AsRef<str>>(
+        &self,
+        names: &[S],
+        options: &AgeOptions,
+    ) -> Result<AgeBulkResponse, Error> {
+        let mut body = serde_json::to_value(options).expect("options serialize");
+        body["names"] = names.iter().map(|n| n.as_ref()).collect::<Vec<_>>().into();
+        self.post("/age/bulk", &body).await
     }
 
     pub async fn account(&self) -> Result<Account, Error> {

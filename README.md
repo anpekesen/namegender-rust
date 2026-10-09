@@ -2,7 +2,7 @@
 
 ```toml
 [dependencies]
-namegender = "0.3"
+namegender = "0.4"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -130,6 +130,37 @@ and `signals` lists the reasons (`code`, `severity`, `part`, `value`).
 fake: use it to flag records for a closer look, not to reject people
 automatically. Surnames are judged by their shape only; `evidence` says what
 the database knows about the first name.
+
+## Age from name
+
+The typical age of the people who carry a first name, from birth records. One
+credit per name.
+
+```rust
+use namegender::AgeOptions;
+
+let none = AgeOptions::default();
+let r = client.age("Brittany", &none).await?;
+println!("{:?}", r.age); // Some(36), the median
+if let Some(range) = &r.age_range {
+    println!("{}-{}", range.low, range.high); // 32-38, the middle half
+}
+
+// Up to 100 names, results in the same order
+let bulk = client.age_bulk(&["Brittany", "Emma"], &none).await?;
+```
+
+`age_range_80` is the middle 80%; a result also has `birth_year`,
+`sample_size`, `births`, `country`, `country_source`, `source`, `series` and
+`reference_year`. `AgeOptions` has `gender` (`male` or `female`; narrows the
+estimate to that gender's records), `country`, `locale` and `ip`. With no hint
+US data is used and `country_source` is `default`.
+
+It covers the US, France and Norway. A name with no estimate is a normal
+result, not an error: `age` is `None` and `reason` is `not_found`,
+`insufficient_data` or `country_not_covered` (any other country; no credit
+charged). It describes a group, not a person: never use it for decisions about
+an individual.
 
 ## Country distribution and account
 
